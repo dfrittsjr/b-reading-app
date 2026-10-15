@@ -1,15 +1,24 @@
 package com.hamferd.breading
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.hamferd.breading.data.Backup
+import com.hamferd.breading.data.Completion
 import com.hamferd.breading.data.DayReadings
+import com.hamferd.breading.data.OtherReading
 import com.hamferd.breading.data.PlanDay
 import com.hamferd.breading.data.PlanProgress
 import com.hamferd.breading.data.PlanRepository
+import com.hamferd.breading.data.ProgressData
 import com.hamferd.breading.data.ProgressStore
 import com.hamferd.breading.data.ReadingPlan
 import com.hamferd.breading.data.SettingsStore
+import com.hamferd.breading.data.Snapshot
+import com.hamferd.breading.data.merge
+import com.hamferd.breading.data.YearCoverage
+import com.hamferd.breading.data.completedPassage
 import com.hamferd.breading.data.dayFor
 import com.hamferd.breading.data.readingsOn
 import com.hamferd.breading.data.trackedDays
@@ -25,6 +34,8 @@ import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.time.Instant
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
@@ -46,10 +57,22 @@ sealed interface UiState {
         val progress: PlanProgress,
         /** The note for [date]. */
         val note: String,
+        /** Readings logged outside any plan, newest first. */
+        val otherReadings: List<OtherReading>,
+        /** Chapters read this calendar year across every plan and logged reading. */
+        val yearCoverage: YearCoverage,
     ) : UiState {
         val isToday: Boolean get() = date == today
     }
 }
+
+data class BackupUiState(
+    val busy: Boolean = false,
+    /** A backup that was read from a file and is waiting for the user to confirm the import. */
+    val pendingImport: Backup? = null,
+    val message: String? = null,
+    val isError: Boolean = false,
+)
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val settingsStore = SettingsStore(app)
@@ -71,7 +94,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ?: return@combine UiState.NoPlans
         val startDate = settings.startDates[plan.id] ?: today
         val date = today.plusDays(offset)
-        val completed = progressData.completed[plan.id].orEmpty()
+        val completed = progressData.completedIds(plan.id)
         val tracked = plan.trackedDays(startDate, today, completed)
         UiState.Ready(
             plans = plans,
@@ -84,6 +107,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             trackedDays = tracked,
             progress = PlanProgress.of(tracked, today),
             note = progressData.notes[date].orEmpty(),
+            otherReadings = progressData.otherReadings,
+            yearCoverage = yearCoverage(today.year, plans, settings.startDates, progressData, today),
         )
     }.flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
@@ -120,15 +145,94 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setRead(readingId: String, done: Boolean) {
         val ready = state.value as? UiState.Ready ?: return
-        viewModelScope.launch { progressStore.setDone(ready.plan.id, readingId, done) }
+        viewModelScope.launch { progressStore.setDone(ready.plan.id, readingId, done, LocalDate.now()) }
+    }
+
+    fun addOtherReading(date: LocalDate, passage: String, source: String) {
+        viewModelScope.launch { progressStore.addOtherReading(date, passage, source) }
+    }
+
+    fun deleteOtherReading(id: String) {
+        viewModelScope.launch { progressStore.deleteOtherReading(id) }
     }
 
     fun saveNote(date: LocalDate, text: String) {
         viewModelScope.launch { progressStore.setNote(date, text) }
     }
 
+    private val _backup = MutableStateFlow(BackupUiState())
+    val backup: StateFlow<BackupUiState> = _backup
+
+    private suspend fun snapshot() = Snapshot(settingsStore.settings.first(), progressStore.data.first())
+
+    fun exportTo(uri: Uri) {
+        _backup.value = BackupUiState(busy = true)
+        viewModelScope.launch {
+            _backup.value = runCatching {
+                val backup = Backup.of(snapshot(), Instant.now().toString())
+                withContext(Dispatchers.IO) {
+                    val out = getApplication<Application>().contentResolver.openOutputStream(uri, "w")
+                        ?: error("Couldn't open the file.")
+                    out.use { it.write(Backup.encode(backup).toByteArray()) }
+                }
+                BackupUiState(message = "Exported ${describe(backup)}.")
+            }.getOrElse { BackupUiState(message = "Export failed: ${it.message}", isError = true) }
+        }
+    }
+
+    /** Reads a backup file; the import happens after [confirmImport]. */
+    fun readBackup(uri: Uri) {
+        _backup.value = BackupUiState(busy = true)
+        viewModelScope.launch {
+            _backup.value = runCatching {
+                val text = withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openInputStream(uri)
+                        ?.use { it.readBytes().decodeToString() } ?: error("Couldn't open the file.")
+                }
+                BackupUiState(pendingImport = Backup.decode(text))
+            }.getOrElse { BackupUiState(message = "Import failed: ${it.message}", isError = true) }
+        }
+    }
+
+    fun confirmImport() {
+        val backup = _backup.value.pendingImport ?: return
+        _backup.value = BackupUiState(busy = true)
+        viewModelScope.launch {
+            _backup.value = runCatching {
+                val merged = merge(snapshot(), backup.toSnapshot())
+                settingsStore.replaceAll(merged.settings)
+                progressStore.replaceAll(merged.progress)
+                dayOffset.value = 0
+                BackupUiState(message = "Imported ${describe(backup)}.")
+            }.getOrElse { BackupUiState(message = "Import failed: ${it.message}", isError = true) }
+        }
+    }
+
+    fun cancelImport() { _backup.value = BackupUiState() }
+
     fun previousDay() = dayOffset.update { it - 1 }
     fun nextDay() = dayOffset.update { it + 1 }
     fun goToToday() { dayOffset.value = 0 }
     fun goToDate(date: LocalDate) { dayOffset.value = ChronoUnit.DAYS.between(today.value, date) }
 }
+
+private fun yearCoverage(
+    year: Int,
+    plans: List<ReadingPlan>,
+    startDates: Map<String, LocalDate>,
+    progress: ProgressData,
+    today: LocalDate,
+): YearCoverage {
+    val fromPlans = plans.flatMap { plan ->
+        val startDate = startDates[plan.id] ?: today
+        progress.completed[plan.id].orEmpty().mapNotNull { completion: Completion ->
+            plan.completedPassage(completion, startDate)?.takeIf { it.second == year }?.first
+        }
+    }
+    val fromElsewhere = progress.otherReadings.filter { it.date.year == year }.map { it.passage }
+    return YearCoverage.of(year, fromPlans + fromElsewhere)
+}
+
+internal fun describe(backup: Backup): String =
+    "${backup.completedCount} checked-off readings, ${backup.notes.size} notes, " +
+        "and ${backup.otherReadings.size} logged readings"

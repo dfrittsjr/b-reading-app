@@ -10,7 +10,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.hamferd.breading.ui.BackupScreen
+import com.hamferd.breading.ui.BibleYearScreen
+import com.hamferd.breading.ui.LogReadingScreen
 import com.hamferd.breading.ui.ProgressScreen
+import com.hamferd.breading.ui.Screen
 import com.hamferd.breading.ui.TodayScreen
 import com.hamferd.breading.ui.theme.BReadingTheme
 
@@ -22,19 +26,25 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             BReadingTheme {
-                var showProgress by rememberSaveable { mutableStateOf(false) }
-                if (showProgress) {
-                    BackHandler { showProgress = false }
-                    ProgressScreen(
+                // Simple back stack: Today is the root; other screens can open "Log other reading".
+                var backStack by rememberSaveable { mutableStateOf(listOf(Screen.Today)) }
+                val navigate = { screen: Screen -> backStack = backStack + screen }
+                val back = { backStack = backStack.dropLast(1) }
+
+                BackHandler(enabled = backStack.size > 1, onBack = back)
+                when (backStack.last()) {
+                    Screen.Today -> TodayScreen(viewModel, onNavigate = navigate)
+                    Screen.PlanProgress -> ProgressScreen(
                         viewModel = viewModel,
-                        onBack = { showProgress = false },
+                        onBack = back,
                         onOpenDay = { date ->
                             viewModel.goToDate(date)
-                            showProgress = false
+                            backStack = listOf(Screen.Today)
                         },
                     )
-                } else {
-                    TodayScreen(viewModel, onOpenProgress = { showProgress = true })
+                    Screen.BibleYear -> BibleYearScreen(viewModel, onBack = back, onLogReading = { navigate(Screen.LogReading) })
+                    Screen.LogReading -> LogReadingScreen(viewModel, onBack = back)
+                    Screen.Backup -> BackupScreen(viewModel, onBack = back)
                 }
             }
         }

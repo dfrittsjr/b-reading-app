@@ -36,6 +36,15 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    /** Replaces the selected plan and all start dates (used when importing a backup). */
+    suspend fun replaceAll(settings: Settings) {
+        context.dataStore.edit { prefs ->
+            prefs.clear()
+            settings.selectedPlanId?.let { prefs[SELECTED_PLAN] = it }
+            settings.startDates.forEach { (planId, date) -> prefs[startKey(planId)] = date.toString() }
+        }
+    }
+
     suspend fun setStartDate(planId: String, date: LocalDate) {
         context.dataStore.edit { it[startKey(planId)] = date.toString() }
     }
