@@ -5,7 +5,10 @@ data class Book(val index: Int, val name: String, val chapters: Int, val aliases
 }
 
 /** A single chapter of a book, e.g. Romans 8. */
-data class ChapterRef(val book: Book, val chapter: Int)
+data class ChapterRef(val book: Book, val chapter: Int) {
+    /** "John 3", or "Psalm 23" for a single psalm. */
+    val label: String get() = "${if (book.name == "Psalms") "Psalm" else book.name} $chapter"
+}
 
 private const val OLD_TESTAMENT_BOOKS = 39
 

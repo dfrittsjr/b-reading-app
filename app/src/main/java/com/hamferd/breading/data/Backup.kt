@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.time.LocalDate
 
-/** Everything the app stores about you: plan settings and progress. */
+/** Everything the app stores about you: plan settings and progress, including notes. */
 data class Snapshot(val settings: Settings, val progress: ProgressData)
 
 /** The JSON file written by "Export". Field names are part of the file format; don't rename them. */
@@ -19,6 +19,7 @@ data class Backup(
     val completed: Map<String, List<CompletedEntry>> = emptyMap(),
     val notes: Map<String, String> = emptyMap(),
     val otherReadings: List<OtherReadingEntry> = emptyList(),
+    val verseNotes: List<VerseNote.Entry> = emptyList(),
 ) {
     @Serializable
     data class CompletedEntry(@SerialName("id") val readingId: String, val date: String? = null)
@@ -41,6 +42,7 @@ data class Backup(
             otherReadings = otherReadings.mapNotNull { e ->
                 parseDate(e.date)?.let { OtherReading(e.id, it, e.passage, e.source) }
             },
+            verseNotes = verseNotes.mapNotNull { it.toNote() },
         ),
     )
 
@@ -64,6 +66,7 @@ data class Backup(
             otherReadings = snapshot.progress.otherReadings.map {
                 OtherReadingEntry(it.id, it.date.toString(), it.passage, it.source)
             },
+            verseNotes = snapshot.progress.verseNotes.map { it.toEntry() },
         )
 
         fun encode(backup: Backup): String = json.encodeToString(serializer(), backup)
@@ -85,7 +88,8 @@ data class Backup(
  * Merges an imported backup into what's on the phone; nothing on the phone is lost.
  * Checked-off readings and logged readings are combined. The backup's plan choice and start
  * dates win, since restoring onto a fresh install should bring them back. A note on the phone
- * is kept if it's not blank, otherwise the backup's note is used.
+ * is kept if it's not blank, otherwise the backup's note is used. Bible notes are combined, and
+ * when both have the same note, the more recently edited version wins.
  */
 fun merge(local: Snapshot, imported: Snapshot): Snapshot {
     val completed = (local.progress.completed.keys + imported.progress.completed.keys).associateWith { plan ->
@@ -97,12 +101,16 @@ fun merge(local: Snapshot, imported: Snapshot): Snapshot {
     }
     val notes = imported.progress.notes + local.progress.notes.filterValues { it.isNotBlank() }
     val other = (local.progress.otherReadings + imported.progress.otherReadings).distinctBy { it.id }
+    val verseNotes = (local.progress.verseNotes + imported.progress.verseNotes)
+        .groupBy { it.id }
+        .map { (_, versions) -> versions.maxBy { it.updatedAt } } // the phone's comes first, so it wins ties
+        .sortedByDescending { it.updatedAt }
 
     return Snapshot(
         settings = Settings(
             selectedPlanId = imported.settings.selectedPlanId ?: local.settings.selectedPlanId,
             startDates = local.settings.startDates + imported.settings.startDates,
         ),
-        progress = ProgressData(completed, notes, other),
+        progress = ProgressData(completed, notes, other, verseNotes),
     )
 }

@@ -19,15 +19,18 @@ data class ProgressData(
     val notes: Map<LocalDate, String>,
     /** Readings logged from outside any plan, newest first. */
     val otherReadings: List<OtherReading>,
+    /** Notes written in the Bible view, most recently edited first. */
+    val verseNotes: List<VerseNote> = emptyList(),
 ) {
     fun completedIds(planId: String): Set<String> = completed[planId].orEmpty().mapTo(HashSet()) { it.readingId }
 }
 
-/** Persists which readings are done, the daily notes, and readings logged elsewhere. */
+/** Persists which readings are done, the daily notes, Bible notes, and readings logged elsewhere. */
 class ProgressStore(private val context: Context) {
     val data: Flow<ProgressData> = context.progressDataStore.data.map { prefs ->
         val completed = mutableMapOf<String, List<Completion>>()
         val notes = mutableMapOf<LocalDate, String>()
+        val verseNotes = mutableListOf<VerseNote>()
         for ((key, value) in prefs.asMap()) {
             when {
                 key.name.startsWith(DONE_PREFIX) ->
@@ -37,11 +40,12 @@ class ProgressStore(private val context: Context) {
                     val date = runCatching { LocalDate.parse(key.name.removePrefix(NOTE_PREFIX)) }.getOrNull()
                     if (date != null) notes[date] = value as String
                 }
+                key.name.startsWith(VERSE_NOTE_PREFIX) -> VerseNote.decode(value as String)?.let(verseNotes::add)
             }
         }
         val other = prefs[OTHER_READINGS].orEmpty().mapNotNull(OtherReading::decode)
             .sortedWith(compareByDescending<OtherReading> { it.date }.thenByDescending { it.id })
-        ProgressData(completed, notes, other)
+        ProgressData(completed, notes, other, verseNotes.sortedByDescending { it.updatedAt })
     }
 
     /** Replaces all stored progress with [data] (used when importing a backup). */
@@ -56,6 +60,7 @@ class ProgressStore(private val context: Context) {
                 if (text.isNotBlank()) prefs[stringPreferencesKey(NOTE_PREFIX + date)] = text
             }
             prefs[OTHER_READINGS] = data.otherReadings.mapTo(HashSet()) { it.encode() }
+            for (note in data.verseNotes) prefs[verseNoteKey(note.id)] = note.encode()
         }
     }
 
@@ -88,11 +93,22 @@ class ProgressStore(private val context: Context) {
         }
     }
 
+    /** Adds [note], or replaces the note with the same ID. */
+    suspend fun saveVerseNote(note: VerseNote) {
+        context.progressDataStore.edit { it[verseNoteKey(note.id)] = note.encode() }
+    }
+
+    suspend fun deleteVerseNote(id: String) {
+        context.progressDataStore.edit { it.remove(verseNoteKey(id)) }
+    }
+
     private companion object {
         const val DONE_PREFIX = "done_"
         const val NOTE_PREFIX = "note_"
+        const val VERSE_NOTE_PREFIX = "vnote_"
         const val DATE_SEPARATOR = "|"
         val OTHER_READINGS = stringSetPreferencesKey("other_readings")
+        fun verseNoteKey(id: String) = stringPreferencesKey(VERSE_NOTE_PREFIX + id)
 
         /** Entries are "readingId|yyyy-MM-dd"; entries saved before dates were recorded have no date. */
         fun decodeCompletion(value: String) = Completion(

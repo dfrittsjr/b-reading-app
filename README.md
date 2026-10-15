@@ -1,8 +1,16 @@
 # b-reading-app
 
 A minimal Android app (Kotlin + Jetpack Compose) that opens straight to today's reading
-from a Bible reading plan. Only references are shown (e.g. "John 3"); you read them in
-your own Bible.
+from a Bible reading plan. The plan view shows references (e.g. "John 3"); the switch in
+the bottom bar flips to a Bible view with the full King James Version, stored in the app
+so it works offline.
+
+## Bible view
+
+The KJV scrolls continuously from Genesis to Revelation. The bottom bar shows the chapter
+you're in: tap it to pick a book and chapter (Old/New Testament tabs, then a chapter
+grid), or use the arrows to step a chapter at a time. The app remembers where you left
+off. The text is in [`data/bible/`](data/bible/README.md).
 
 ## Reading plans
 

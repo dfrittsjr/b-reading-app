@@ -2,7 +2,6 @@ package com.hamferd.breading.ui
 
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,7 +24,6 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
@@ -111,6 +109,10 @@ fun TodayScreen(viewModel: MainViewModel, onNavigate: (Screen) -> Unit) {
                                     showMoreMenu = false
                                     onNavigate(Screen.BibleYear)
                                 }
+                                MenuItem("Bible notes", R.drawable.ic_edit_note) {
+                                    showMoreMenu = false
+                                    onNavigate(Screen.BibleNotes)
+                                }
                                 MenuItem("Plan progress", R.drawable.ic_progress) {
                                     showMoreMenu = false
                                     onNavigate(Screen.PlanProgress)
@@ -146,7 +148,12 @@ fun TodayScreen(viewModel: MainViewModel, onNavigate: (Screen) -> Unit) {
             when (val s = state) {
                 UiState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 UiState.NoPlans -> CenteredMessage("No reading plans found.\nAdd .txt files to data/plans and rebuild.")
-                is UiState.Ready -> ReadingContent(s, viewModel) { onNavigate(Screen.PlanProgress) }
+                is UiState.Ready -> ReadingContent(
+                    state = s,
+                    viewModel = viewModel,
+                    onOpenProgress = { onNavigate(Screen.PlanProgress) },
+                    onOpenBible = { onNavigate(Screen.Bible) },
+                )
             }
         }
     }
@@ -168,7 +175,12 @@ fun TodayScreen(viewModel: MainViewModel, onNavigate: (Screen) -> Unit) {
 }
 
 @Composable
-private fun ReadingContent(state: UiState.Ready, viewModel: MainViewModel, onOpenProgress: () -> Unit) {
+private fun ReadingContent(
+    state: UiState.Ready,
+    viewModel: MainViewModel,
+    onOpenProgress: () -> Unit,
+    onOpenBible: () -> Unit,
+) {
     val onToggle = { reading: Reading -> viewModel.setRead(reading.id, !reading.done) }
     val catchUp = if (state.isToday) state.progress.catchUp else emptyList()
 
@@ -253,15 +265,15 @@ private fun ReadingContent(state: UiState.Ready, viewModel: MainViewModel, onOpe
             }
         }
 
-        HorizontalDivider()
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        ViewBar(
+            showingBible = false,
+            onSwitchView = onOpenBible,
+            previousDescription = "Previous day",
+            onPrevious = viewModel::previousDay,
+            nextDescription = "Next day",
+            onNext = viewModel::nextDay,
         ) {
-            ToolbarIcon(R.drawable.ic_chevron_left, "Previous day", viewModel::previousDay)
             TextButton(onClick = viewModel::goToToday, enabled = !state.isToday) { Text("Today") }
-            ToolbarIcon(R.drawable.ic_chevron_right, "Next day", viewModel::nextDay)
         }
     }
 }

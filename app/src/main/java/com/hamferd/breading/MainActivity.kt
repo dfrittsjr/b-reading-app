@@ -11,6 +11,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.hamferd.breading.ui.BackupScreen
+import com.hamferd.breading.ui.BibleNotesScreen
+import com.hamferd.breading.ui.BibleScreen
 import com.hamferd.breading.ui.BibleYearScreen
 import com.hamferd.breading.ui.LogReadingScreen
 import com.hamferd.breading.ui.ProgressScreen
@@ -26,7 +28,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             BReadingTheme {
-                // Simple back stack: Today is the root; other screens can open "Log other reading".
+                // Simple back stack: Today is the root, and the Bible view sits on top of it.
+                // Other screens can open "Log other reading".
                 var backStack by rememberSaveable { mutableStateOf(listOf(Screen.Today)) }
                 val navigate = { screen: Screen -> backStack = backStack + screen }
                 val back = { backStack = backStack.dropLast(1) }
@@ -34,6 +37,15 @@ class MainActivity : ComponentActivity() {
                 BackHandler(enabled = backStack.size > 1, onBack = back)
                 when (backStack.last()) {
                     Screen.Today -> TodayScreen(viewModel, onNavigate = navigate)
+                    Screen.Bible -> BibleScreen(viewModel, onShowPlan = back, onOpenNotes = { navigate(Screen.BibleNotes) })
+                    Screen.BibleNotes -> BibleNotesScreen(
+                        viewModel = viewModel,
+                        onBack = back,
+                        onOpenNote = { note ->
+                            viewModel.showInBible(note)
+                            backStack = listOf(Screen.Today, Screen.Bible)
+                        },
+                    )
                     Screen.PlanProgress -> ProgressScreen(
                         viewModel = viewModel,
                         onBack = back,

@@ -67,7 +67,7 @@ fun BackupScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Export", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Saves your checked-off readings, notes, logged readings, and plan start dates " +
+                        "Saves your checked-off readings, notes (daily and Bible), logged readings, and plan start dates " +
                             "to a file. Choose Google Drive in the file picker to keep it in the cloud.",
                         style = MaterialTheme.typography.bodyMedium,
                     )

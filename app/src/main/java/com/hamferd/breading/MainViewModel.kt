@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hamferd.breading.data.Backup
+import com.hamferd.breading.data.BibleText
+import com.hamferd.breading.data.ChapterRef
 import com.hamferd.breading.data.Completion
 import com.hamferd.breading.data.DayReadings
 import com.hamferd.breading.data.OtherReading
@@ -13,9 +15,12 @@ import com.hamferd.breading.data.PlanProgress
 import com.hamferd.breading.data.PlanRepository
 import com.hamferd.breading.data.ProgressData
 import com.hamferd.breading.data.ProgressStore
+import com.hamferd.breading.data.ReaderPosition
+import com.hamferd.breading.data.ReaderStore
 import com.hamferd.breading.data.ReadingPlan
 import com.hamferd.breading.data.SettingsStore
 import com.hamferd.breading.data.Snapshot
+import com.hamferd.breading.data.VerseNote
 import com.hamferd.breading.data.merge
 import com.hamferd.breading.data.YearCoverage
 import com.hamferd.breading.data.completedPassage
@@ -23,13 +28,17 @@ import com.hamferd.breading.data.dayFor
 import com.hamferd.breading.data.readingsOn
 import com.hamferd.breading.data.trackedDays
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -77,6 +86,7 @@ data class BackupUiState(
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val settingsStore = SettingsStore(app)
     private val progressStore = ProgressStore(app)
+    private val readerStore = ReaderStore(app)
 
     private val plans = flow { emit(PlanRepository(app.assets).loadAll()) }
         .flowOn(Dispatchers.IO)
@@ -210,6 +220,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cancelImport() { _backup.value = BackupUiState() }
 
+    /** The KJV text, loaded the first time the Bible view opens. */
+    val bible: StateFlow<BibleText?> = flow { emit(BibleText.loadKjv(app.assets)) }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.Lazily, null)
+
+    /** Where the Bible view was left, or null until [loadReaderPosition] has read it. */
+    var readerPosition: ReaderPosition? = null
+        private set
+    private var savingPosition: Job? = null
+
+    suspend fun loadReaderPosition(): ReaderPosition =
+        readerPosition ?: readerStore.position.first().also { readerPosition = it }
+
+    fun setReaderPosition(position: ReaderPosition) {
+        if (position == readerPosition) return
+        readerPosition = position
+        // Save once scrolling settles rather than for every verse that goes by.
+        savingPosition?.cancel()
+        savingPosition = viewModelScope.launch {
+            delay(500)
+            readerStore.save(position)
+        }
+    }
+
+    /** Notes written in the Bible view, most recently edited first. */
+    val verseNotes: StateFlow<List<VerseNote>> = progressStore.data.map { it.verseNotes }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Saves a note on [verses] of [chapter], as a new note when [id] is null. Blank [text] deletes it. */
+    fun saveVerseNote(id: String?, chapter: ChapterRef, verses: List<Int>, text: String) {
+        viewModelScope.launch {
+            when {
+                text.isNotBlank() -> progressStore.saveVerseNote(
+                    VerseNote(id ?: VerseNote.newId(), chapter, verses.sorted(), text, Instant.now()),
+                )
+                id != null -> progressStore.deleteVerseNote(id)
+            }
+        }
+    }
+
+    fun deleteVerseNote(id: String) {
+        viewModelScope.launch { progressStore.deleteVerseNote(id) }
+    }
+
+    /** Makes the Bible view open at [note]'s first verse. */
+    fun showInBible(note: VerseNote) = setReaderPosition(ReaderPosition(note.chapter, note.verses.first()))
+
     fun previousDay() = dayOffset.update { it - 1 }
     fun nextDay() = dayOffset.update { it + 1 }
     fun goToToday() { dayOffset.value = 0 }
@@ -234,5 +292,5 @@ private fun yearCoverage(
 }
 
 internal fun describe(backup: Backup): String =
-    "${backup.completedCount} checked-off readings, ${backup.notes.size} notes, " +
-        "and ${backup.otherReadings.size} logged readings"
+    "${backup.completedCount} checked-off readings, ${backup.notes.size} day notes, " +
+        "${backup.verseNotes.size} Bible notes, and ${backup.otherReadings.size} logged readings"

@@ -1,3 +1,3 @@
 package com.hamferd.breading.ui
 
-enum class Screen { Today, PlanProgress, BibleYear, LogReading, Backup }
+enum class Screen { Today, Bible, BibleNotes, PlanProgress, BibleYear, LogReading, Backup }
